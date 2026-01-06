@@ -30,8 +30,11 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "cookieguard@thejaydenproject",
-      "strict_min_version": "115.0"
+      "id": "{da60867a-62f1-4363-9562-b911767664c3}",
+      "strict_min_version": "115.0",
+      "data_collection_permissions": {
+        "required": "none"
+      }
     }
   },
   "content_security_policy": {
