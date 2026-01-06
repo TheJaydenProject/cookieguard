@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CookieGuard",
-  "version": "3.2.0",
+  "version": "1.0.0",
   "description": "Zero-Trust cookie visibility. Local-only architecture. Optimized for Firefox.",
   "author": "TheJaydenProject",
   "icons": {
