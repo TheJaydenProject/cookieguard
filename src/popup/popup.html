@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="script-src 'self'; object-src 'none'">
+  <title>CookieGuard</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .rotating {
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <h1 class="logo">
+        <svg class="logo-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <circle cx="12" cy="12" r="3"></circle>
+          <line x1="12" y1="2" x2="12" y2="4"></line>
+          <line x1="12" y1="20" x2="12" y2="22"></line>
+          <line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line>
+          <line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line>
+          <line x1="2" y1="12" x2="4" y2="12"></line>
+          <line x1="20" y1="12" x2="22" y2="12"></line>
+          <line x1="6.34" y1="17.66" x2="4.93" y2="19.07"></line>
+          <line x1="19.07" y1="4.93" x2="17.66" y2="6.34"></line>
+        </svg>
+        <span class="logo-text">CookieGuard</span>
+      </h1>
+      <div class="header-actions">
+        <button id="settingsBtn" class="icon-btn" title="Settings" aria-label="Settings">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+        </button>
+        <button id="refreshBtn" class="icon-btn" title="Refresh" aria-label="Refresh">
+          <svg id="refreshIcon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 4v6h-6M1 20v-6h6"></path>
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+    
+    <div class="stats-bar">
+      <div class="stat">
+        <span class="stat-label">Active</span>
+        <span id="activeCookies" class="stat-value">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">High Risk</span>
+        <span id="highRiskCount" class="stat-value stat-risk">0</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Muted</span>
+        <span id="mutedCount" class="stat-value">0</span>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="active">Active</button>
+    <button class="tab" data-tab="history">History</button>
+    <button class="tab" data-tab="muted">Muted</button>
+  </nav>
+
+  <main class="content">
+    <div id="activeTab" class="tab-content active">
+      <div class="filter-bar">
+        <input type="search" id="searchInput" placeholder="Search cookies..." class="search-input">
+        <select id="riskFilter" class="filter-select">
+          <option value="all">All Risk Levels</option>
+          <option value="high">High Risk Only</option>
+          <option value="medium">Medium Risk</option>
+          <option value="low">Low Risk</option>
+        </select>
+      </div>
+
+      <div id="circuitBreakerAlerts" class="alert-container"></div>
+
+      <div id="cookieList" class="cookie-list">
+        </div>
+    </div>
+
+    <div id="historyTab" class="tab-content">
+      <div class="history-notice">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"></path>
+        </svg>
+        <span>Last 5,000 events retained</span>
+      </div>
+      
+      <div class="history-controls">
+        <select id="historyLimit" class="filter-select">
+          <option value="50">Last 50 events</option>
+          <option value="100" selected>Last 100 events</option>
+          <option value="500">Last 500 events</option>
+          <option value="1000">Last 1000 events</option>
+        </select>
+        <button id="clearHistoryBtn" class="btn btn-danger">Clear History</button>
+      </div>
+
+      <div id="historyList" class="history-list">
+        </div>
+    </div>
+
+    <div id="mutedTab" class="tab-content">
+      <div class="muted-notice">
+        <p>Muted domains will not trigger notifications or appear in the active list.</p>
+      </div>
+
+      <div id="mutedList" class="muted-list">
+        </div>
+    </div>
+  </main>
+
+  <div id="settingsPanel" class="settings-panel">
+    <div class="settings-header">
+      <button id="settingsBackBtn" class="nav-back-btn" aria-label="Back">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+      </button>
+      <h2>Settings</h2>
+      <div style="width: 24px;"></div>
+    </div>
+    
+    <div class="settings-body">
+      <div class="setting-group">
+        <h3>Privacy</h3>
+        <label class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Incognito Mode Support</span>
+            <span class="setting-description">Monitor cookies in private windows</span>
+          </div>
+          <input type="checkbox" id="incognitoEnabled" class="toggle">
+        </label>
+      </div>
+
+      <div class="setting-group">
+        <h3>Notifications</h3>
+        <label class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Enable Notifications</span>
+            <span class="setting-description">Show alerts for high-risk cookies</span>
+          </div>
+          <input type="checkbox" id="notificationsEnabled" class="toggle">
+        </label>
+      </div>
+
+      <div class="setting-group">
+        <h3>Appearance</h3>
+        <label class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Theme</span>
+          </div>
+          <select id="themeSelect" class="setting-select">
+            <option value="auto">Auto (System)</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="setting-group">
+        <h3>Developer</h3>
+        <button id="testNotifyBtn" class="btn btn-secondary" style="margin-top: 10px; width: 100%;">
+          Send Test Notification
+        </button>
+        <label class="setting-row">
+          <div class="setting-info">
+            <span class="setting-label">Developer Mode</span>
+            <span class="setting-description">Enable data export tools</span>
+          </div>
+          <input type="checkbox" id="developerMode" class="toggle">
+        </label>
+
+        <div id="developerOptions" class="developer-options" style="display: none;">
+          <button id="exportDataBtn" class="btn btn-secondary">Export Data (Metadata)</button>
+          <button id="exportWithValuesBtn" class="btn btn-danger">Export Data (Values)</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <h3>Storage</h3>
+        <div class="storage-stats-clean">
+          <div class="stat-clean">
+             <span class="stat-key">Used</span>
+             <span class="stat-val" id="storageUsed">-</span>
+          </div>
+          <div class="stat-clean">
+             <span class="stat-key">Events</span>
+             <span class="stat-val" id="eventsRetained">-</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-footer-info">
+        <p>CookieGuard v1.0.0</p>
+        <p class="subtle">Local-only architecture. Zero external tracking.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="detailModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Cookie Details</h2>
+        <button class="modal-close" aria-label="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+      
+      <div class="modal-body" id="detailContent"></div>
+
+      <div class="modal-footer">
+        <button id="muteDomainBtn" class="btn btn-secondary">Mute Domain</button>
+        </div>
+    </div>
+  </div>
+
+  <div id="firstLaunchModal" class="modal" style="display: none;">
+     <div class="modal-content wizard">
+      <div class="modal-body">
+        <div class="wizard-container">
+          <div class="wizard-header">
+            <div class="wizard-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              </svg>
+            </div>
+            <h1 class="wizard-title">Privacy-First Cookie Visibility</h1>
+            <p class="wizard-subtitle">Monitor real-time cookie activity with complete transparency. All data stays local.</p>
+          </div>
+
+          <div class="wizard-features">
+            <div class="wizard-feature">
+              <div class="wizard-feature-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                </svg>
+              </div>
+              <div class="wizard-feature-content">
+                <h3 class="wizard-feature-title">Real-Time Monitoring</h3>
+                <p class="wizard-feature-text">Track cookies as they are created and modified across all your browsing sessions</p>
+              </div>
+            </div>
+
+            <div class="wizard-feature">
+              <div class="wizard-feature-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+              </div>
+              <div class="wizard-feature-content">
+                <h3 class="wizard-feature-title">Local-Only Storage</h3>
+                <p class="wizard-feature-text">Your data never leaves your device. Complete privacy guaranteed with zero cloud sync</p>
+              </div>
+            </div>
+
+            <div class="wizard-feature">
+              <div class="wizard-feature-icon">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </div>
+              <div class="wizard-feature-content">
+                <h3 class="wizard-feature-title">Risk Classification</h3>
+                <p class="wizard-feature-text">Automatic assessment of tracking cookies and third-party data collection</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="wizard-philosophy">
+            <h4 class="wizard-philosophy-title">Our Philosophy</h4>
+            <p class="wizard-philosophy-text">Visibility does not equal protection. We provide the information. You make the informed choice about your privacy.</p>
+          </div>
+
+          <button id="completeWizardBtn" class="wizard-cta">Get Started</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

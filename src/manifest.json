@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "CookieGuard",
+  "version": "1.0.0",
+  "description": "Zero-Trust cookie visibility. Local-only architecture. Optimized for Firefox.",
+  "author": "TheJaydenProject",
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+  "background": {
+    "scripts": ["background/service-worker.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "CookieGuard"
+  },
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "cookieguard@thejaydenproject",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'"
+  }
+}
