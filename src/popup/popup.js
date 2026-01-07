@@ -12,15 +12,27 @@ const state = {
 
 function createElementFromHTML(htmlString) {
   const template = document.createElement('template');
-  template.innerHTML = htmlString.trim();
-  return template.content.firstChild;
+  const fragment = document.createDocumentFragment();
+  
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlString, 'text/html');
+  
+  Array.from(doc.body.childNodes).forEach(node => {
+    fragment.appendChild(node.cloneNode(true));
+  });
+  
+  return fragment.firstChild;
 }
 
 function setChildren(parent, htmlString) {
   parent.textContent = '';
-  const template = document.createElement('template');
-  template.innerHTML = htmlString.trim();
-  parent.appendChild(template.content);
+  
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlString, 'text/html');
+  
+  Array.from(doc.body.childNodes).forEach(node => {
+    parent.appendChild(node.cloneNode(true));
+  });
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
