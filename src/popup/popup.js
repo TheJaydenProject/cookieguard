@@ -31,7 +31,7 @@ function initializeEventListeners() {
   
   document.getElementById('settingsBtn').addEventListener('click', openSettings);
   document.getElementById('settingsBackBtn').addEventListener('click', closeSettings);
-  document.getElementById('refreshBtn').addEventListener('click', refreshActiveData);
+  document.getElementById('refreshBtn').addEventListener('click', handleRefreshClick);
   
   document.getElementById('searchInput').addEventListener('input', (e) => {
     state.filters.search = e.target.value.toLowerCase();
@@ -61,11 +61,42 @@ function initializeEventListeners() {
   document.getElementById('muteDomainBtn').addEventListener('click', muteDomainFromDetail);
   document.getElementById('completeWizardBtn')?.addEventListener('click', completeWizard);
   
+  document.getElementById('mutedList').addEventListener('click', (e) => {
+    if (e.target.matches('[data-action="unmute"]')) {
+      const domain = e.target.dataset.domain;
+      if (domain) unmuteDomain(domain);
+    }
+  });
+
   document.querySelectorAll('.modal').forEach(modal => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) closeModals();
     });
   });
+
+  document.getElementById('testNotifyBtn').addEventListener('click', async () => {
+    try {
+      const response = await browser.runtime.sendMessage({ type: 'TRIGGER_TEST_NOTIFICATION' });
+      if (response.success) {
+        switchTab('active');
+        closeSettings();
+        await loadActiveCookies(); 
+      }
+    } catch (err) {
+      console.error("Test failed", err);
+    }
+  });
+}
+
+async function handleRefreshClick() {
+  const icon = document.getElementById('refreshIcon');
+  icon.classList.add('rotating');
+  
+  await refreshActiveData();
+  
+  setTimeout(() => {
+    icon.classList.remove('rotating');
+  }, 500);
 }
 
 async function loadData() {
@@ -234,7 +265,14 @@ function renderHistory() {
   
   container.innerHTML = visibleHistory.map(event => `
     <div class="history-item">
-       </div>
+      <div>
+        <span class="history-action ${event.action}">${event.action.toUpperCase()}</span>
+        <strong>${sanitizeInput(event.name)}</strong>
+        <span style="color: var(--text-tertiary)"> on </span>
+        <span>${sanitizeInput(event.domain)}</span>
+      </div>
+      <div class="history-time">${formatTime(event.timestamp)}</div>
+    </div>
   `).join('');
 
   if (state.history.length > RENDER_LIMIT) {
@@ -273,7 +311,7 @@ function renderMutedList() {
           ${info.manual ? ' (Manual)' : ''}
         </div>
       </div>
-      <button class="btn btn-secondary" onclick="unmuteDomain('${domain}')">Unmute</button>
+      <button class="btn btn-secondary" data-action="unmute" data-domain="${sanitizeInput(domain)}">Unmute</button>
     </div>
   `).join('');
 }
@@ -447,7 +485,7 @@ async function muteDomainFromDetail() {
   }
 }
 
-window.unmuteDomain = async function(domain) {
+async function unmuteDomain(domain) {
   try {
     await browser.runtime.sendMessage({ type: 'UNMUTE_DOMAIN', domain });
     await loadMutedDomains();
@@ -456,7 +494,7 @@ window.unmuteDomain = async function(domain) {
     console.error('Failed to unmute domain:', error);
     alert('Failed to unmute domain');
   }
-};
+}
 
 async function clearHistory() {
   if (!confirm('Clear all cookie history? This cannot be undone.')) return;

@@ -574,17 +574,22 @@ body {
 .modal-close {
   background: transparent;
   border: none;
-  font-size: 28px;
   color: var(--text-secondary);
   cursor: pointer;
-  padding: 0;
-  width: 32px;
-  height: 32px;
+  padding: 4px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-sm);
   transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.modal-close svg {
+  width: 20px;
+  height: 20px;
 }
 
 .modal-close:hover {

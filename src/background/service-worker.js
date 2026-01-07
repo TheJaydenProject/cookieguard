@@ -21,6 +21,7 @@ const SESSION_BACKUP_KEY = 'cg_session_state';
 const SAVE_ALARM_NAME = 'save_state_debounce';
 
 let notificationTimers = new Map();
+let notificationDomains = new Map();
 
 browser.runtime.onInstalled.addListener(async (details) => {
   if (details.reason === 'install') {
@@ -126,7 +127,8 @@ browser.cookies.onChanged.addListener(async (changeInfo) => {
     sameSite: cookie.sameSite,
     session: cookie.session,
     changeCount: 1,
-    lastSeen: Date.now()
+    lastSeen: Date.now(),
+    isIncognito: isPrivate
   };
 
   if (removed) {
@@ -141,7 +143,7 @@ browser.cookies.onChanged.addListener(async (changeInfo) => {
     scheduleNotification(etld);
   }
 
-  if (cookie.storeId === '0') {
+  if (!isPrivate) {
     storageQueue.push(eventRecord);
 
     const alarm = await browser.alarms.get(STORAGE_ALARM_NAME);
@@ -169,7 +171,12 @@ function triggerStateSave() {
 async function hydrateCookies() {
   try {
     const allCookies = await browser.cookies.getAll({});
+    const settings = await storage.getSettings();
+    
     for (const cookie of allCookies) {
+      const isPrivate = isIncognito(cookie.storeId);
+      if (isPrivate && !settings.incognitoEnabled) continue;
+      
       const etld = getETLDPlus1(cookie.domain);
       const is3rdParty = isThirdParty(cookie.domain, null);
       
@@ -190,14 +197,15 @@ async function hydrateCookies() {
         etld,
         storeId: cookie.storeId,
         riskLevel: classification,
-        isThirdParty,
+        isThirdParty: is3rdParty,
         isPartitioned: !!cookie.partitionKey,
         secure: cookie.secure,
         httpOnly: cookie.httpOnly,
         sameSite: cookie.sameSite,
         session: cookie.session,
         changeCount: 1,
-        lastSeen: Date.now()
+        lastSeen: Date.now(),
+        isIncognito: isPrivate
       });
     }
     triggerStateSave();
@@ -233,7 +241,10 @@ function scheduleNotification(domain) {
   if (notificationTimers.has(domain)) return;
   
   const id = setTimeout(() => {
-    browser.notifications.create({
+    const notificationId = `cg-alert-${domain}-${Date.now()}`;
+    notificationDomains.set(notificationId, domain);
+    
+    browser.notifications.create(notificationId, {
       type: 'basic',
       iconUrl: '../assets/icons/icon48.png',
       title: 'CookieGuard Alert',
@@ -244,6 +255,22 @@ function scheduleNotification(domain) {
   
   notificationTimers.set(domain, id);
 }
+
+browser.notifications.onClicked.addListener(async (notificationId) => {
+  const domain = notificationDomains.get(notificationId);
+  
+  await browser.windows.create({
+    url: browser.runtime.getURL(`popup/popup.html?domain=${encodeURIComponent(domain || '')}`),
+    type: 'popup',
+    width: 616,
+    height: 600,
+    top: 0,
+    left: screen.width - 380
+  });
+  
+  browser.notifications.clear(notificationId);
+  notificationDomains.delete(notificationId);
+});
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
@@ -284,6 +311,39 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       else if (message.type === 'EXPORT_DATA') {
         const data = await storage.exportData(message.includeValues);
         sendResponse({ data });
+      }
+      else if (message.type === 'TRIGGER_TEST_NOTIFICATION') {
+        const testDomain = 'tracker-test-site.com';
+        
+        scheduleNotification(testDomain);
+        
+        const testHash = "test-notification-hash";
+        const testEvent = {
+          identityHash: testHash,
+          timestamp: Date.now(),
+          action: 'added',
+          name: 'TEST_TRACKER_COOKIE',
+          domain: testDomain,
+          etld: testDomain,
+          riskLevel: 'high',
+          isThirdParty: true,
+          isPartitioned: false,
+          changeCount: 1,
+          lastSeen: Date.now(),
+          storeId: '0',
+          isIncognito: false
+        };
+        
+        state.identityMap.set(testHash, testEvent);
+        storageQueue.push(testEvent);
+        
+        const alarm = await browser.alarms.get(STORAGE_ALARM_NAME);
+        if (!alarm) {
+          browser.alarms.create(STORAGE_ALARM_NAME, { delayInMinutes: 0.05 });
+        }
+
+        sendResponse({ success: true });
+        return true;
       }
     } catch (e) {
       sendResponse({ error: e.message });

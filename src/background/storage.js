@@ -47,7 +47,7 @@ export class StorageManager {
       
       await browser.storage.local.set({
         [STORAGE_KEYS.METADATA]: {
-          version: '3.2',
+          version: '1.0.0',
           lastPrune: Date.now(),
           totalEvents: 0,
         },
@@ -64,16 +64,10 @@ export class StorageManager {
     if (events.length === 0) return;
     
     try {
-      const persistentEvents = events.filter(e => !e.isIncognito);
-      
-      if (persistentEvents.length === 0) {
-        return;
-      }
-      
       const stored = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
       const history = stored[STORAGE_KEYS.HISTORY] || [];
       
-      const updated = [...history, ...persistentEvents];
+      const updated = [...history, ...events];
       
       let final = updated;
       if (updated.length > PRUNE_THRESHOLD) {
@@ -85,7 +79,7 @@ export class StorageManager {
       });
       
       const meta = await this.getMetadata();
-      meta.totalEvents += persistentEvents.length;
+      meta.totalEvents += events.length;
       meta.lastWrite = Date.now();
       await browser.storage.local.set({
         [STORAGE_KEYS.METADATA]: meta,
@@ -205,7 +199,7 @@ export class StorageManager {
     try {
       const stored = await browser.storage.local.get(STORAGE_KEYS.METADATA);
       return stored[STORAGE_KEYS.METADATA] || {
-        version: '3.2',
+        version: '1.0.0',
         totalEvents: 0,
         lastPrune: null,
         prunedCount: 0,
@@ -228,7 +222,7 @@ export class StorageManager {
       const metadata = await this.getMetadata();
       
       const exportData = {
-        version: '3.2',
+        version: '1.0.0',
         exportDate: new Date().toISOString(),
         metadata,
         settings: {
@@ -256,7 +250,8 @@ export class StorageManager {
   async getStorageStats() {
     try {
       const bytesInUse = await browser.storage.local.getBytesInUse();
-      const history = await this.getHistory(1);
+      const stored = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
+      const history = stored[STORAGE_KEYS.HISTORY] || [];
       const metadata = await this.getMetadata();
       
       return {
