@@ -10,6 +10,19 @@ const state = {
   selectedCookie: null,
 };
 
+function createElementFromHTML(htmlString) {
+  const template = document.createElement('template');
+  template.innerHTML = htmlString.trim();
+  return template.content.firstChild;
+}
+
+function setChildren(parent, htmlString) {
+  parent.textContent = '';
+  const template = document.createElement('template');
+  template.innerHTML = htmlString.trim();
+  parent.appendChild(template.content);
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initializeEventListeners();
 
@@ -194,7 +207,7 @@ function renderCookieList() {
   });
   
   if (filtered.length === 0) {
-    container.innerHTML = `
+    const emptyHTML = `
       <div class="empty-state">
         <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="12" cy="12" r="10"></circle>
@@ -206,48 +219,94 @@ function renderCookieList() {
         <p class="empty-subtitle">${state.cookies.length === 0 ? 'Browse websites to see cookie activity' : 'Try adjusting your filters'}</p>
       </div>
     `;
+    setChildren(container, emptyHTML);
     return;
   }
   
   filtered.sort((a, b) => b.timestamp - a.timestamp);
-  container.innerHTML = filtered.map(cookie => createCookieItemHTML(cookie)).join('');
+  
+  container.textContent = '';
+  filtered.forEach(cookie => {
+    const item = createCookieItemElement(cookie);
+    container.appendChild(item);
+  });
   
   container.querySelectorAll('.cookie-item').forEach((item, index) => {
     item.addEventListener('click', () => showCookieDetail(filtered[index]));
   });
 }
 
-function createCookieItemHTML(cookie) {
-  const riskBadge = `<span class="badge badge-${cookie.riskLevel}">${cookie.riskLevel}</span>`;
-  const partitionedBadge = cookie.isPartitioned ? '<span class="badge badge-partitioned">PART</span>' : '';
-  const secureBadge = cookie.secure ? '<span class="badge badge-secure">SEC</span>' : '';
+function createCookieItemElement(cookie) {
+  const item = document.createElement('div');
+  item.className = 'cookie-item';
+  item.dataset.hash = cookie.identityHash;
   
-  return `
-    <div class="cookie-item" data-hash="${cookie.identityHash}">
-      <div class="cookie-header">
-        <div class="cookie-info">
-          <div class="cookie-name">${sanitizeInput(cookie.name)}</div>
-          <div class="cookie-domain">${sanitizeInput(cookie.domain)}</div>
-        </div>
-        <div class="cookie-badges">
-          ${riskBadge}
-          ${partitionedBadge}
-          ${secureBadge}
-        </div>
-      </div>
-      <div class="cookie-meta">
-        <span>${formatTime(cookie.timestamp)}</span>
-        ${cookie.changeCount > 1 ? `<span>${cookie.changeCount} changes</span>` : ''}
-      </div>
-    </div>
-  `;
+  const header = document.createElement('div');
+  header.className = 'cookie-header';
+  
+  const info = document.createElement('div');
+  info.className = 'cookie-info';
+  
+  const name = document.createElement('div');
+  name.className = 'cookie-name';
+  name.textContent = sanitizeInput(cookie.name);
+  
+  const domain = document.createElement('div');
+  domain.className = 'cookie-domain';
+  domain.textContent = sanitizeInput(cookie.domain);
+  
+  info.appendChild(name);
+  info.appendChild(domain);
+  
+  const badges = document.createElement('div');
+  badges.className = 'cookie-badges';
+  
+  const riskBadge = document.createElement('span');
+  riskBadge.className = `badge badge-${cookie.riskLevel}`;
+  riskBadge.textContent = cookie.riskLevel;
+  badges.appendChild(riskBadge);
+  
+  if (cookie.isPartitioned) {
+    const partBadge = document.createElement('span');
+    partBadge.className = 'badge badge-partitioned';
+    partBadge.textContent = 'PART';
+    badges.appendChild(partBadge);
+  }
+  
+  if (cookie.secure) {
+    const secBadge = document.createElement('span');
+    secBadge.className = 'badge badge-secure';
+    secBadge.textContent = 'SEC';
+    badges.appendChild(secBadge);
+  }
+  
+  header.appendChild(info);
+  header.appendChild(badges);
+  
+  const meta = document.createElement('div');
+  meta.className = 'cookie-meta';
+  
+  const time = document.createElement('span');
+  time.textContent = formatTime(cookie.timestamp);
+  meta.appendChild(time);
+  
+  if (cookie.changeCount > 1) {
+    const changes = document.createElement('span');
+    changes.textContent = `${cookie.changeCount} changes`;
+    meta.appendChild(changes);
+  }
+  
+  item.appendChild(header);
+  item.appendChild(meta);
+  
+  return item;
 }
 
 function renderHistory() {
   const container = document.getElementById('historyList');
   
   if (state.history.length === 0) {
-    container.innerHTML = `
+    const emptyHTML = `
       <div class="empty-state">
         <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"></path>
@@ -257,23 +316,18 @@ function renderHistory() {
         <p class="empty-subtitle">Cookie events will appear here</p>
       </div>
     `;
+    setChildren(container, emptyHTML);
     return;
   }
 
   const RENDER_LIMIT = 100;
   const visibleHistory = state.history.slice(0, RENDER_LIMIT);
   
-  container.innerHTML = visibleHistory.map(event => `
-    <div class="history-item">
-      <div>
-        <span class="history-action ${event.action}">${event.action.toUpperCase()}</span>
-        <strong>${sanitizeInput(event.name)}</strong>
-        <span style="color: var(--text-tertiary)"> on </span>
-        <span>${sanitizeInput(event.domain)}</span>
-      </div>
-      <div class="history-time">${formatTime(event.timestamp)}</div>
-    </div>
-  `).join('');
+  container.textContent = '';
+  visibleHistory.forEach(event => {
+    const item = createHistoryItemElement(event);
+    container.appendChild(item);
+  });
 
   if (state.history.length > RENDER_LIMIT) {
     const warning = document.createElement('div');
@@ -283,12 +337,48 @@ function renderHistory() {
   }
 }
 
+function createHistoryItemElement(event) {
+  const item = document.createElement('div');
+  item.className = 'history-item';
+  
+  const mainDiv = document.createElement('div');
+  
+  const action = document.createElement('span');
+  action.className = `history-action ${event.action}`;
+  action.textContent = event.action.toUpperCase();
+  
+  const cookieName = document.createElement('strong');
+  cookieName.textContent = sanitizeInput(event.name);
+  
+  const onText = document.createElement('span');
+  onText.style.color = 'var(--text-tertiary)';
+  onText.textContent = ' on ';
+  
+  const domainSpan = document.createElement('span');
+  domainSpan.textContent = sanitizeInput(event.domain);
+  
+  mainDiv.appendChild(action);
+  mainDiv.appendChild(document.createTextNode(' '));
+  mainDiv.appendChild(cookieName);
+  mainDiv.appendChild(onText);
+  mainDiv.appendChild(domainSpan);
+  
+  const time = document.createElement('div');
+  time.className = 'history-time';
+  time.textContent = formatTime(event.timestamp);
+  
+  item.appendChild(mainDiv);
+  item.appendChild(time);
+  
+  return item;
+}
+
 function renderMutedList() {
   const container = document.getElementById('mutedList');
   const mutedEntries = Object.entries(state.mutedDomains);
   
   if (mutedEntries.length === 0) {
-    container.innerHTML = `
+    const emptyHTML = `
       <div class="empty-state">
         <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M11 5L6 9H2v6h4l5 4V5z"></path>
@@ -299,21 +389,44 @@ function renderMutedList() {
         <p class="empty-subtitle">Mute domains from cookie context menus</p>
       </div>
     `;
+    setChildren(container, emptyHTML);
     return;
   }
   
-  container.innerHTML = mutedEntries.map(([domain, info]) => `
-    <div class="muted-item">
-      <div>
-        <div class="muted-domain">${sanitizeInput(domain)}</div>
-        <div class="muted-date">
-          Muted ${formatTime(info.timestamp)}
-          ${info.manual ? ' (Manual)' : ''}
-        </div>
-      </div>
-      <button class="btn btn-secondary" data-action="unmute" data-domain="${sanitizeInput(domain)}">Unmute</button>
-    </div>
-  `).join('');
+  container.textContent = '';
+  mutedEntries.forEach(([domain, info]) => {
+    const item = createMutedItemElement(domain, info);
+    container.appendChild(item);
+  });
+}
+
+function createMutedItemElement(domain, info) {
+  const item = document.createElement('div');
+  item.className = 'muted-item';
+  
+  const infoDiv = document.createElement('div');
+  
+  const domainDiv = document.createElement('div');
+  domainDiv.className = 'muted-domain';
+  domainDiv.textContent = sanitizeInput(domain);
+  
+  const dateDiv = document.createElement('div');
+  dateDiv.className = 'muted-date';
+  dateDiv.textContent = `Muted ${formatTime(info.timestamp)}${info.manual ? ' (Manual)' : ''}`;
+  
+  infoDiv.appendChild(domainDiv);
+  infoDiv.appendChild(dateDiv);
+  
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-secondary';
+  btn.dataset.action = 'unmute';
+  btn.dataset.domain = sanitizeInput(domain);
+  btn.textContent = 'Unmute';
+  
+  item.appendChild(infoDiv);
+  item.appendChild(btn);
+  
+  return item;
 }
 
 function updateStats() {
@@ -347,75 +460,69 @@ function showCookieDetail(cookie) {
   const modal = document.getElementById('detailModal');
   const content = document.getElementById('detailContent');
   
-  content.innerHTML = `
-    <div class="cookie-detail">
-      <div class="detail-section">
-        <h3>Identity</h3>
-        <div class="detail-row">
-          <span>Name</span>
-          <strong>${sanitizeInput(cookie.name)}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Domain</span>
-          <strong>${sanitizeInput(cookie.domain)}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Path</span>
-          <strong>${sanitizeInput(cookie.path)}</strong>
-        </div>
-      </div>
-      
-      <div class="detail-section">
-        <h3>Classification</h3>
-        <div class="detail-row">
-          <span>Risk Level</span>
-          <strong style="color: var(--risk-${cookie.riskLevel})">${cookie.riskLevel.toUpperCase()}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Third Party</span>
-          <strong>${cookie.isThirdParty ? 'Yes' : 'No'}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Partitioned</span>
-          <strong>${cookie.isPartitioned ? 'Yes' : 'No'}</strong>
-        </div>
-      </div>
-      
-      <div class="detail-section">
-        <h3>Security</h3>
-        <div class="detail-row">
-          <span>Secure</span>
-          <strong>${cookie.secure ? 'Yes' : 'No'}</strong>
-        </div>
-        <div class="detail-row">
-          <span>HttpOnly</span>
-          <strong>${cookie.httpOnly ? 'Yes' : 'No'}</strong>
-        </div>
-        <div class="detail-row">
-          <span>SameSite</span>
-          <strong>${cookie.sameSite || 'None'}</strong>
-        </div>
-      </div>
-      
-      <div class="detail-section">
-        <h3>Metadata</h3>
-        <div class="detail-row">
-          <span>Created</span>
-          <strong>${new Date(cookie.timestamp).toLocaleString()}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Session</span>
-          <strong>${cookie.session ? 'Yes' : 'No'}</strong>
-        </div>
-        <div class="detail-row">
-          <span>Changes</span>
-          <strong>${cookie.changeCount}</strong>
-        </div>
-      </div>
-    </div>
-  `;
+  content.textContent = '';
   
+  const detailDiv = document.createElement('div');
+  detailDiv.className = 'cookie-detail';
+  
+  const identitySection = createDetailSection('Identity', [
+    ['Name', sanitizeInput(cookie.name)],
+    ['Domain', sanitizeInput(cookie.domain)],
+    ['Path', sanitizeInput(cookie.path)]
+  ]);
+  
+  const classSection = createDetailSection('Classification', [
+    ['Risk Level', cookie.riskLevel.toUpperCase(), `var(--risk-${cookie.riskLevel})`],
+    ['Third Party', cookie.isThirdParty ? 'Yes' : 'No'],
+    ['Partitioned', cookie.isPartitioned ? 'Yes' : 'No']
+  ]);
+  
+  const secSection = createDetailSection('Security', [
+    ['Secure', cookie.secure ? 'Yes' : 'No'],
+    ['HttpOnly', cookie.httpOnly ? 'Yes' : 'No'],
+    ['SameSite', cookie.sameSite || 'None']
+  ]);
+  
+  const metaSection = createDetailSection('Metadata', [
+    ['Created', new Date(cookie.timestamp).toLocaleString()],
+    ['Session', cookie.session ? 'Yes' : 'No'],
+    ['Changes', String(cookie.changeCount)]
+  ]);
+  
+  detailDiv.appendChild(identitySection);
+  detailDiv.appendChild(classSection);
+  detailDiv.appendChild(secSection);
+  detailDiv.appendChild(metaSection);
+  
+  content.appendChild(detailDiv);
   modal.classList.add('active');
+}
+
+function createDetailSection(title, rows) {
+  const section = document.createElement('div');
+  section.className = 'detail-section';
+  
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  section.appendChild(heading);
+  
+  rows.forEach(([label, value, color]) => {
+    const row = document.createElement('div');
+    row.className = 'detail-row';
+    
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = label;
+    
+    const valueStrong = document.createElement('strong');
+    valueStrong.textContent = value;
+    if (color) valueStrong.style.color = color;
+    
+    row.appendChild(labelSpan);
+    row.appendChild(valueStrong);
+    section.appendChild(row);
+  });
+  
+  return section;
 }
 
 function openSettings() {
@@ -558,14 +665,41 @@ function closeModals() {
 
 function showCircuitBreakerAlerts(domains) {
   const container = document.getElementById('circuitBreakerAlerts');
-  container.innerHTML = domains.map(domain => `
-    <div class="alert">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2L1 21h22L12 2zm0 3.5L19.5 19h-15L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z"/>
-      </svg>
-      <span>High activity from <strong>${sanitizeInput(domain)}</strong> has been muted temporarily</span>
-    </div>
-  `).join('');
+  
+  container.textContent = '';
+  domains.forEach(domain => {
+    const alert = createCircuitBreakerAlert(domain);
+    container.appendChild(alert);
+  });
+}
+
+function createCircuitBreakerAlert(domain) {
+  const alert = document.createElement('div');
+  alert.className = 'alert';
+  
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'currentColor');
+  
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M12 2L1 21h22L12 2zm0 3.5L19.5 19h-15L12 5.5zM11 10v4h2v-4h-2zm0 6v2h2v-2h-2z');
+  svg.appendChild(path);
+  
+  const text = document.createElement('span');
+  text.textContent = 'High activity from ';
+  
+  const strong = document.createElement('strong');
+  strong.textContent = sanitizeInput(domain);
+  
+  text.appendChild(strong);
+  text.appendChild(document.createTextNode(' has been muted temporarily'));
+  
+  alert.appendChild(svg);
+  alert.appendChild(text);
+  
+  return alert;
 }
 
 function showFirstLaunchWizard() {
