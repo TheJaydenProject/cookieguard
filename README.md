@@ -1,4 +1,5 @@
 # CookieGuard
+[Live on Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/cookieguard/)
 
 **Zero-Trust Cookie Visibility. Local-Only Architecture.**
 
