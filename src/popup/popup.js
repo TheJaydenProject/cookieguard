@@ -340,6 +340,7 @@ function createCookieItemElement(cookie) {
     const partBadge = document.createElement('span');
     partBadge.className = 'badge badge-partitioned';
     partBadge.textContent = '[PART]';
+    partBadge.title = 'Partitioned (CHIPS): cookie is isolated per top-level site, not shared across sites for tracking';
     badges.appendChild(partBadge);
   }
 
@@ -347,6 +348,7 @@ function createCookieItemElement(cookie) {
     const secBadge = document.createElement('span');
     secBadge.className = 'badge badge-secure';
     secBadge.textContent = '[SEC]';
+    secBadge.title = 'Secure: cookie is only sent over HTTPS connections';
     badges.appendChild(secBadge);
   }
 
