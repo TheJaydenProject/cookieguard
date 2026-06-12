@@ -102,14 +102,14 @@
 }
 
 html {
-  width: 480px;
-  height: 640px;
+  width: 560px;
+  height: 600px;
   overflow: hidden;
 }
 
 body {
-  width: 480px;
-  height: 640px;
+  width: 560px;
+  height: 600px;
   font-family: var(--font-sans);
   font-size: 13px;
   line-height: 1.5;
