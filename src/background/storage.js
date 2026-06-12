@@ -3,6 +3,7 @@ const PRUNE_THRESHOLD = 5500;
 const STORAGE_KEYS = {
   SETTINGS: 'cg_settings',
   MUTED_DOMAINS: 'cg_muted_domains',
+  BLOCKED_DOMAINS: 'cg_blocked_domains',
   HISTORY: 'cg_history',
   METADATA: 'cg_metadata',
 };
@@ -11,7 +12,6 @@ const DEFAULT_SETTINGS = {
   incognitoEnabled: false,
   developerMode: false,
   notificationsEnabled: true,
-  autoMuteBigTech: false,
   theme: 'auto',
 };
 
@@ -37,7 +37,14 @@ export class StorageManager {
           [STORAGE_KEYS.MUTED_DOMAINS]: {},
         });
       }
-      
+
+      const blocked = await browser.storage.local.get(STORAGE_KEYS.BLOCKED_DOMAINS);
+      if (!blocked[STORAGE_KEYS.BLOCKED_DOMAINS]) {
+        await browser.storage.local.set({
+          [STORAGE_KEYS.BLOCKED_DOMAINS]: {},
+        });
+      }
+
       const history = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
       if (!history[STORAGE_KEYS.HISTORY]) {
         await browser.storage.local.set({
@@ -62,33 +69,66 @@ export class StorageManager {
   
   async appendEvents(events) {
     if (events.length === 0) return;
-    
+
     try {
       const stored = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
       const history = stored[STORAGE_KEYS.HISTORY] || [];
-      
-      const updated = [...history, ...events];
-      
+
+      const newEntries = this.coalesceBlockedEvents(events, history);
+      const updated = [...history, ...newEntries];
+
       let final = updated;
       if (updated.length > PRUNE_THRESHOLD) {
         final = this.pruneHistory(updated);
       }
-      
+
       await browser.storage.local.set({
         [STORAGE_KEYS.HISTORY]: final,
       });
-      
+
       const meta = await this.getMetadata();
       meta.totalEvents += events.length;
       meta.lastWrite = Date.now();
       await browser.storage.local.set({
         [STORAGE_KEYS.METADATA]: meta,
       });
-      
+
     } catch (error) {
       console.error('[StorageManager] Append failed:', error);
       throw error;
     }
+  }
+
+  // 'blocked' events are coalesced into a single per-domain entry (with a running
+  // count) so a domain repeatedly retrying after being blocked can't flood the
+  // rolling history buffer. Entries marked `episodeClosed` (via closeBlockEpisode,
+  // triggered on unblock) are skipped so a future block on the same domain starts
+  // a fresh tactical episode with its own counter instead of resuming the old one.
+  // Mutates matching entries in `history` in place and returns only the entries
+  // that still need to be appended.
+  coalesceBlockedEvents(events, history) {
+    const toAppend = [];
+
+    for (const event of events) {
+      if (event.action !== 'blocked') {
+        toAppend.push(event);
+        continue;
+      }
+
+      const count = event.count ?? 1;
+      const existing = history.find(e => e.action === 'blocked' && e.identityHash === event.identityHash && !e.episodeClosed)
+        || toAppend.find(e => e.action === 'blocked' && e.identityHash === event.identityHash && !e.episodeClosed);
+
+      if (existing) {
+        existing.count = (existing.count ?? 1) + count;
+        existing.timestamp = event.timestamp;
+        existing.lastSeen = event.timestamp;
+      } else {
+        toAppend.push({ ...event, count });
+      }
+    }
+
+    return toAppend;
   }
   
   pruneHistory(events) {
@@ -164,7 +204,7 @@ export class StorageManager {
     try {
       const muted = await this.getMutedDomains();
       delete muted[domain];
-      
+
       await browser.storage.local.set({
         [STORAGE_KEYS.MUTED_DOMAINS]: muted,
       });
@@ -172,7 +212,83 @@ export class StorageManager {
       throw error;
     }
   }
-  
+
+  // Shape: { [storeId]: { [etld]: { timestamp, manual } } }. Indexing by cookie
+  // store (container/private-browsing identity) keeps a block scoped to the
+  // context it was created in instead of leaking across containers.
+  async getBlockedDomains() {
+    try {
+      const stored = await browser.storage.local.get(STORAGE_KEYS.BLOCKED_DOMAINS);
+      return stored[STORAGE_KEYS.BLOCKED_DOMAINS] || {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  async blockDomain(storeId, domain, manual = false) {
+    try {
+      const blocked = await this.getBlockedDomains();
+      if (!blocked[storeId]) {
+        blocked[storeId] = {};
+      }
+      blocked[storeId][domain] = {
+        timestamp: Date.now(),
+        manual,
+      };
+
+      await browser.storage.local.set({
+        [STORAGE_KEYS.BLOCKED_DOMAINS]: blocked,
+      });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  async unblockDomain(storeId, domain) {
+    try {
+      const blocked = await this.getBlockedDomains();
+      if (blocked[storeId]) {
+        delete blocked[storeId][domain];
+        if (Object.keys(blocked[storeId]).length === 0) {
+          delete blocked[storeId];
+        }
+      }
+
+      await browser.storage.local.set({
+        [STORAGE_KEYS.BLOCKED_DOMAINS]: blocked,
+      });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  // Marks any open 'blocked' history entry for this identityHash as closed so
+  // coalesceBlockedEvents will not resume it. Called when a domain is unblocked,
+  // ensuring a future re-block starts a brand-new tactical episode/counter.
+  async closeBlockEpisode(identityHash) {
+    try {
+      const stored = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
+      const history = stored[STORAGE_KEYS.HISTORY] || [];
+
+      let changed = false;
+      for (const event of history) {
+        if (event.action === 'blocked' && event.identityHash === identityHash && !event.episodeClosed) {
+          event.episodeClosed = true;
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await browser.storage.local.set({
+          [STORAGE_KEYS.HISTORY]: history,
+        });
+      }
+    } catch (error) {
+      console.error('[StorageManager] closeBlockEpisode failed:', error);
+    }
+  }
+
+
   async getSettings() {
     try {
       const stored = await browser.storage.local.get(STORAGE_KEYS.SETTINGS);
@@ -219,8 +335,9 @@ export class StorageManager {
       
       const history = await browser.storage.local.get(STORAGE_KEYS.HISTORY);
       const muted = await this.getMutedDomains();
+      const blocked = await this.getBlockedDomains();
       const metadata = await this.getMetadata();
-      
+
       const exportData = {
         version: '1.0.0',
         exportDate: new Date().toISOString(),
@@ -230,7 +347,8 @@ export class StorageManager {
           developerMode: undefined,
         },
         mutedDomains: muted,
-        history: includeValues 
+        blockedDomains: blocked,
+        history: includeValues
           ? history[STORAGE_KEYS.HISTORY]
           : history[STORAGE_KEYS.HISTORY].map(e => ({
               ...e,

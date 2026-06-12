@@ -1,9 +1,20 @@
-import { sanitizeInput, formatTime } from '../lib/utils.js';
+import { sanitizeInput, formatTime, isIncognito } from '../lib/utils.js';
+import {
+  getCookieInsights,
+  decodeFlags,
+  getLifespanText,
+  getChurnText,
+  getDeleteWarning,
+  getBlockWarning,
+  getPrivacyThreatMeaning,
+  getBreakageImpactMeaning,
+} from '../lib/cookieInsights.js';
 
 const state = {
   cookies: [],
   history: [],
   mutedDomains: {},
+  blockedDomains: {},
   settings: {},
   filters: { search: '', risk: 'all' },
   currentTab: 'active',
@@ -84,16 +95,27 @@ function initializeEventListeners() {
   document.getElementById('exportDataBtn').addEventListener('click', () => exportData(false));
   document.getElementById('exportWithValuesBtn').addEventListener('click', () => exportData(true));
   document.getElementById('muteDomainBtn').addEventListener('click', muteDomainFromDetail);
+  document.getElementById('deleteCookieBtn').addEventListener('click', deleteCookie);
+  document.getElementById('blockDomainBtn').addEventListener('click', blockDomainFromDetail);
+  document.getElementById('cleanNowBtn').addEventListener('click', cleanNow);
   document.getElementById('completeWizardBtn')?.addEventListener('click', completeWizard);
-  
+
   document.getElementById('mutedList').addEventListener('click', (e) => {
     if (e.target.matches('[data-action="unmute"]')) {
       const domain = e.target.dataset.domain;
-      if (domain) unmuteDomain(domain);
+      if (domain) confirmAndUnmute(domain);
     }
   });
 
-  document.querySelectorAll('.modal').forEach(modal => {
+  document.getElementById('blockedList').addEventListener('click', (e) => {
+    if (e.target.matches('[data-action="unblock"]')) {
+      const domain = e.target.dataset.domain;
+      const storeId = e.target.dataset.storeId;
+      if (domain && storeId) confirmAndUnblock(domain, storeId);
+    }
+  });
+
+  document.querySelectorAll('.modal, .detail-panel').forEach(modal => {
     modal.addEventListener('click', (e) => {
       if (e.target === modal) closeModals();
     });
@@ -125,7 +147,7 @@ async function handleRefreshClick() {
 }
 
 async function loadData() {
-  await Promise.all([loadActiveCookies(), loadHistory(), loadMutedDomains()]);
+  await Promise.all([loadActiveCookies(), loadHistory(), loadRules()]);
 }
 
 async function loadActiveCookies() {
@@ -166,21 +188,16 @@ async function loadHistory() {
   }
 }
 
-async function loadMutedDomains() {
+async function loadRules() {
   try {
-    const response = await browser.runtime.sendMessage({ type: 'GET_SETTINGS' });
-    if (response.error) {
-      console.error('Failed to load settings:', response.error);
-      return;
-    }
-    
-    const result = await browser.storage.local.get('cg_muted_domains');
+    const result = await browser.storage.local.get(['cg_muted_domains', 'cg_blocked_domains']);
     state.mutedDomains = result.cg_muted_domains || {};
-    
-    renderMutedList();
+    state.blockedDomains = result.cg_blocked_domains || {};
+
+    await Promise.all([renderMutedList(), renderBlockedList()]);
     updateStats();
   } catch (error) {
-    console.error('Failed to load muted domains:', error);
+    console.error('Failed to load rules:', error);
   }
 }
 
@@ -199,10 +216,8 @@ async function loadSettings() {
   }
 }
 
-function renderCookieList() {
-  const container = document.getElementById('cookieList');
-  
-  let filtered = state.cookies.filter(cookie => {
+function getFilteredCookies() {
+  return state.cookies.filter(cookie => {
     if (state.filters.search) {
       const searchLower = state.filters.search;
       if (!cookie.name.toLowerCase().includes(searchLower) &&
@@ -210,14 +225,32 @@ function renderCookieList() {
         return false;
       }
     }
-    
+
     if (state.filters.risk !== 'all' && cookie.riskLevel !== state.filters.risk) {
       return false;
     }
-    
+
     return true;
   });
-  
+}
+
+function isFilterActive() {
+  return state.filters.search !== '' || state.filters.risk !== 'all';
+}
+
+function updateCleanButton(filtered) {
+  const btn = document.getElementById('cleanNowBtn');
+  const label = isFilterActive() ? 'Clean Filtered' : 'Clean All';
+  btn.textContent = `${label} (${filtered.length})`;
+  btn.disabled = filtered.length === 0;
+}
+
+function renderCookieList() {
+  const container = document.getElementById('cookieList');
+
+  let filtered = getFilteredCookies();
+  updateCleanButton(filtered);
+
   if (filtered.length === 0) {
     const emptyHTML = `
       <div class="empty-state">
@@ -252,65 +285,96 @@ function createCookieItemElement(cookie) {
   const item = document.createElement('div');
   item.className = 'cookie-item';
   item.dataset.hash = cookie.identityHash;
-  
-  const header = document.createElement('div');
-  header.className = 'cookie-header';
-  
-  const info = document.createElement('div');
-  info.className = 'cookie-info';
-  
-  const name = document.createElement('div');
-  name.className = 'cookie-name';
-  name.textContent = sanitizeInput(cookie.name);
-  
-  const domain = document.createElement('div');
-  domain.className = 'cookie-domain';
-  domain.textContent = sanitizeInput(cookie.domain);
-  
-  info.appendChild(name);
-  info.appendChild(domain);
-  
+
+  // Header strip: domain.com -> cookie_name
+  const route = document.createElement('div');
+  route.className = 'cookie-route';
+
+  const routeDomain = document.createElement('span');
+  routeDomain.className = 'route-domain';
+  routeDomain.textContent = sanitizeInput(cookie.domain);
+
+  const routeArrow = document.createElement('span');
+  routeArrow.className = 'route-arrow';
+  routeArrow.textContent = '→';
+
+  const routeName = document.createElement('span');
+  routeName.className = 'route-name';
+  routeName.textContent = sanitizeInput(cookie.name);
+
+  route.appendChild(routeDomain);
+  route.appendChild(routeArrow);
+  route.appendChild(routeName);
+
+  const meta = document.createElement('div');
+  meta.className = 'cookie-meta';
+
+  const metaLeft = document.createElement('div');
+  metaLeft.className = 'cookie-meta-left';
+
+  // 3-segment risk gauge, illuminated entirely via CSS data-attribute selectors
+  const riskIndicator = document.createElement('div');
+  riskIndicator.className = 'risk-indicator';
+
+  const gauge = document.createElement('div');
+  gauge.className = 'risk-gauge';
+  gauge.dataset.risk = cookie.riskLevel;
+  for (let i = 0; i < 3; i++) {
+    const bar = document.createElement('span');
+    bar.className = 'risk-gauge-bar';
+    gauge.appendChild(bar);
+  }
+
+  const riskLabel = document.createElement('span');
+  riskLabel.className = `risk-label risk-label-${cookie.riskLevel}`;
+  riskLabel.textContent = cookie.riskLevel.toUpperCase();
+
+  riskIndicator.appendChild(gauge);
+  riskIndicator.appendChild(riskLabel);
+  metaLeft.appendChild(riskIndicator);
+
   const badges = document.createElement('div');
   badges.className = 'cookie-badges';
-  
-  const riskBadge = document.createElement('span');
-  riskBadge.className = `badge badge-${cookie.riskLevel}`;
-  riskBadge.textContent = cookie.riskLevel;
-  badges.appendChild(riskBadge);
-  
+
   if (cookie.isPartitioned) {
     const partBadge = document.createElement('span');
     partBadge.className = 'badge badge-partitioned';
-    partBadge.textContent = 'PART';
+    partBadge.textContent = '[PART]';
     badges.appendChild(partBadge);
   }
-  
+
   if (cookie.secure) {
     const secBadge = document.createElement('span');
     secBadge.className = 'badge badge-secure';
-    secBadge.textContent = 'SEC';
+    secBadge.textContent = '[SEC]';
     badges.appendChild(secBadge);
   }
-  
-  header.appendChild(info);
-  header.appendChild(badges);
-  
-  const meta = document.createElement('div');
-  meta.className = 'cookie-meta';
-  
+
+  if (badges.childNodes.length > 0) {
+    metaLeft.appendChild(badges);
+  }
+
+  const metaRight = document.createElement('div');
+  metaRight.className = 'cookie-meta-right';
+
   const time = document.createElement('span');
+  time.className = 'cookie-time';
   time.textContent = formatTime(cookie.timestamp);
-  meta.appendChild(time);
-  
+  metaRight.appendChild(time);
+
   if (cookie.changeCount > 1) {
     const changes = document.createElement('span');
+    changes.className = 'cookie-changes';
     changes.textContent = `${cookie.changeCount} changes`;
-    meta.appendChild(changes);
+    metaRight.appendChild(changes);
   }
-  
-  item.appendChild(header);
+
+  meta.appendChild(metaLeft);
+  meta.appendChild(metaRight);
+
+  item.appendChild(route);
   item.appendChild(meta);
-  
+
   return item;
 }
 
@@ -352,44 +416,107 @@ function renderHistory() {
 function createHistoryItemElement(event) {
   const item = document.createElement('div');
   item.className = 'history-item';
-  
+
   const mainDiv = document.createElement('div');
-  
+
   const action = document.createElement('span');
   action.className = `history-action ${event.action}`;
-  action.textContent = event.action.toUpperCase();
-  
-  const cookieName = document.createElement('strong');
-  cookieName.textContent = sanitizeInput(event.name);
-  
-  const onText = document.createElement('span');
-  onText.style.color = 'var(--text-tertiary)';
-  onText.textContent = ' on ';
-  
-  const domainSpan = document.createElement('span');
-  domainSpan.textContent = sanitizeInput(event.domain);
-  
+  action.textContent = event.action.toUpperCase().replace('_', ' ');
+
   mainDiv.appendChild(action);
   mainDiv.appendChild(document.createTextNode(' '));
-  mainDiv.appendChild(cookieName);
-  mainDiv.appendChild(onText);
-  mainDiv.appendChild(domainSpan);
-  
+
+  if (event.action === 'bulk_deleted') {
+    const summary = document.createElement('span');
+    summary.textContent = `${event.cookiesRemoved} cookie${event.cookiesRemoved === 1 ? '' : 's'} across ${event.domainsAffected} domain${event.domainsAffected === 1 ? '' : 's'}`;
+    mainDiv.appendChild(summary);
+  } else if (event.action === 'blocked') {
+    const domainSpan = document.createElement('strong');
+    domainSpan.textContent = sanitizeInput(event.domain);
+    mainDiv.appendChild(domainSpan);
+
+    if (event.count > 1) {
+      const countSpan = document.createElement('span');
+      countSpan.style.color = 'var(--text-tertiary)';
+      countSpan.textContent = ` (x${event.count})`;
+      mainDiv.appendChild(countSpan);
+    }
+  } else {
+    const cookieName = document.createElement('strong');
+    cookieName.textContent = sanitizeInput(event.name);
+
+    const onText = document.createElement('span');
+    onText.style.color = 'var(--text-tertiary)';
+    onText.textContent = ' on ';
+
+    const domainSpan = document.createElement('span');
+    domainSpan.textContent = sanitizeInput(event.domain);
+
+    mainDiv.appendChild(cookieName);
+    mainDiv.appendChild(onText);
+    mainDiv.appendChild(domainSpan);
+  }
+
   const time = document.createElement('div');
   time.className = 'history-time';
   time.textContent = formatTime(event.timestamp);
-  
+
   item.appendChild(mainDiv);
   item.appendChild(time);
-  
+
   return item;
 }
 
-function renderMutedList() {
-  const container = document.getElementById('mutedList');
-  const mutedEntries = Object.entries(state.mutedDomains);
-  
-  if (mutedEntries.length === 0) {
+// Muted domains are stored as { [etld]: info } (global, not container-scoped).
+function flattenMutedDomains(mutedDomains) {
+  return Object.entries(mutedDomains).map(([domain, info]) => ({ domain, info, storeId: null }));
+}
+
+// Blocked domains are stored as { [storeId]: { [etld]: info } } so a block in
+// one container/private-browsing context doesn't leak into another.
+function flattenBlockedDomains(blockedDomains) {
+  const entries = [];
+  for (const [storeId, domains] of Object.entries(blockedDomains)) {
+    for (const [domain, info] of Object.entries(domains)) {
+      entries.push({ domain, info, storeId });
+    }
+  }
+  return entries;
+}
+
+function getContainerLabel(storeId) {
+  if (storeId === null || storeId === undefined) return null;
+  if (isIncognito(storeId)) return 'Private Browsing';
+  if (storeId === '0' || storeId === 'firefox-default') return 'Default';
+  return `Container ${storeId}`;
+}
+
+async function fetchDomainStats(domain, storeId) {
+  try {
+    const response = await browser.runtime.sendMessage({ type: 'GET_DOMAIN_STATS', domain, storeId });
+    if (response.error) {
+      console.error('Failed to fetch domain stats:', response.error);
+      return null;
+    }
+    return response.stats;
+  } catch (error) {
+    console.error('Failed to fetch domain stats:', error);
+    return null;
+  }
+}
+
+async function renderMutedList() {
+  await renderRuleList('mutedList', flattenMutedDomains(state.mutedDomains), 'muted');
+}
+
+async function renderBlockedList() {
+  await renderRuleList('blockedList', flattenBlockedDomains(state.blockedDomains), 'blocked');
+}
+
+async function renderRuleList(containerId, entries, type) {
+  const container = document.getElementById(containerId);
+
+  if (entries.length === 0) {
     const emptyHTML = `
       <div class="empty-state">
         <svg class="empty-icon" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -397,59 +524,107 @@ function renderMutedList() {
           <line x1="23" y1="9" x2="17" y2="15"></line>
           <line x1="17" y1="9" x2="23" y2="15"></line>
         </svg>
-        <p class="empty-title">No muted domains</p>
-        <p class="empty-subtitle">Mute domains from cookie context menus</p>
+        <p class="empty-title">No ${type} domains</p>
+        <p class="empty-subtitle">${type === 'blocked'
+          ? 'Block domains from a cookie\'s details to remove their cookies'
+          : 'Mute domains from cookie context menus'}</p>
       </div>
     `;
     setChildren(container, emptyHTML);
     return;
   }
-  
+
+  const statsResults = await Promise.all(entries.map(entry => fetchDomainStats(entry.domain, entry.storeId)));
+
   container.textContent = '';
-  mutedEntries.forEach(([domain, info]) => {
-    const item = createMutedItemElement(domain, info);
+  entries.forEach((entry, index) => {
+    const item = createDomainRuleItem(entry.domain, entry.info, type, entry.storeId, statsResults[index]);
     container.appendChild(item);
   });
 }
 
-function createMutedItemElement(domain, info) {
+function createDomainRuleItem(domain, info, type, storeId, stats) {
   const item = document.createElement('div');
   item.className = 'muted-item';
-  
+
   const infoDiv = document.createElement('div');
-  
+  infoDiv.className = 'muted-info';
+
+  const domainRow = document.createElement('div');
+  domainRow.className = 'muted-domain-row';
+
   const domainDiv = document.createElement('div');
   domainDiv.className = 'muted-domain';
   domainDiv.textContent = sanitizeInput(domain);
-  
+  domainRow.appendChild(domainDiv);
+
+  const containerLabel = getContainerLabel(storeId);
+  if (containerLabel) {
+    const containerBadge = document.createElement('span');
+    containerBadge.className = 'container-badge';
+    containerBadge.textContent = containerLabel;
+    domainRow.appendChild(containerBadge);
+  }
+
+  infoDiv.appendChild(domainRow);
+
+  const verb = type === 'blocked' ? 'Blocked' : 'Muted';
   const dateDiv = document.createElement('div');
   dateDiv.className = 'muted-date';
-  dateDiv.textContent = `Muted ${formatTime(info.timestamp)}${info.manual ? ' (Manual)' : ''}`;
-  
-  infoDiv.appendChild(domainDiv);
+  dateDiv.textContent = `${verb} ${formatTime(info.timestamp)}${info.manual ? ' (Manual)' : ''}`;
   infoDiv.appendChild(dateDiv);
-  
+
+  const statsDiv = document.createElement('div');
+  statsDiv.className = 'rule-stats';
+
+  if (!stats) {
+    statsDiv.classList.add('rule-stats-unknown');
+    statsDiv.textContent = 'Live cookie status unavailable';
+  } else if (type === 'blocked') {
+    if (stats.cookieCount === 0) {
+      statsDiv.classList.add('rule-stats-clean');
+      statsDiv.textContent = 'Block active — 0 cookies present';
+    } else {
+      statsDiv.classList.add('rule-stats-warning');
+      statsDiv.textContent = `${stats.cookieCount} cookie${stats.cookieCount === 1 ? '' : 's'} currently present — cleanup pending`;
+    }
+  } else {
+    const { low, medium, high } = stats.riskCounts;
+    statsDiv.textContent = `${stats.cookieCount} active cookie${stats.cookieCount === 1 ? '' : 's'} (${high} high, ${medium} medium, ${low} low risk)`;
+  }
+  infoDiv.appendChild(statsDiv);
+
   const btn = document.createElement('button');
   btn.className = 'btn btn-secondary';
-  btn.dataset.action = 'unmute';
+  btn.dataset.action = type === 'blocked' ? 'unblock' : 'unmute';
   btn.dataset.domain = sanitizeInput(domain);
-  btn.textContent = 'Unmute';
-  
+  if (storeId !== null && storeId !== undefined) {
+    btn.dataset.storeId = sanitizeInput(storeId);
+  }
+  btn.textContent = type === 'blocked' ? 'Unblock' : 'Unmute';
+
   item.appendChild(infoDiv);
   item.appendChild(btn);
-  
+
   return item;
+}
+
+function countBlockedDomains() {
+  return Object.values(state.blockedDomains)
+    .reduce((sum, domains) => sum + Object.keys(domains).length, 0);
 }
 
 function updateStats() {
   document.getElementById('activeCookies').textContent = state.cookies.length;
   document.getElementById('highRiskCount').textContent = state.cookies.filter(c => c.riskLevel === 'high').length;
+  document.getElementById('blockedCount').textContent = countBlockedDomains();
   document.getElementById('mutedCount').textContent = Object.keys(state.mutedDomains).length;
 }
 
 function switchTab(tabName) {
   state.currentTab = tabName;
-  
+  document.body.dataset.tab = tabName;
+
   document.querySelectorAll('.tab').forEach(tab => {
     tab.classList.toggle('active', tab.dataset.tab === tabName);
   });
@@ -462,8 +637,8 @@ function switchTab(tabName) {
   
   if (tabName === 'history' && state.history.length === 0) {
     loadHistory();
-  } else if (tabName === 'muted' && Object.keys(state.mutedDomains).length === 0) {
-    loadMutedDomains();
+  } else if (tabName === 'rules' && Object.keys(state.mutedDomains).length === 0 && Object.keys(state.blockedDomains).length === 0) {
+    loadRules();
   }
 }
 
@@ -471,70 +646,183 @@ function showCookieDetail(cookie) {
   state.selectedCookie = cookie;
   const modal = document.getElementById('detailModal');
   const content = document.getElementById('detailContent');
-  
+
   content.textContent = '';
-  
+
+  const insights = getCookieInsights(cookie);
+
   const detailDiv = document.createElement('div');
   detailDiv.className = 'cookie-detail';
-  
-  const identitySection = createDetailSection('Identity', [
-    ['Name', sanitizeInput(cookie.name)],
-    ['Domain', sanitizeInput(cookie.domain)],
-    ['Path', sanitizeInput(cookie.path)]
-  ]);
-  
-  const classSection = createDetailSection('Classification', [
-    ['Risk Level', cookie.riskLevel.toUpperCase(), `var(--risk-${cookie.riskLevel})`],
-    ['Third Party', cookie.isThirdParty ? 'Yes' : 'No'],
-    ['Partitioned', cookie.isPartitioned ? 'Yes' : 'No']
-  ]);
-  
-  const secSection = createDetailSection('Security', [
-    ['Secure', cookie.secure ? 'Yes' : 'No'],
-    ['HttpOnly', cookie.httpOnly ? 'Yes' : 'No'],
-    ['SameSite', cookie.sameSite || 'None']
-  ]);
-  
-  const metaSection = createDetailSection('Metadata', [
-    ['Created', new Date(cookie.timestamp).toLocaleString()],
-    ['Session', cookie.session ? 'Yes' : 'No'],
-    ['Changes', String(cookie.changeCount)]
-  ]);
-  
-  detailDiv.appendChild(identitySection);
-  detailDiv.appendChild(classSection);
-  detailDiv.appendChild(secSection);
-  detailDiv.appendChild(metaSection);
-  
+
+  detailDiv.appendChild(buildHeaderZone(cookie, insights));
+  detailDiv.appendChild(buildImpactZone(insights));
+  detailDiv.appendChild(buildFlagsZone(cookie));
+  detailDiv.appendChild(buildFootprintZone(cookie));
+
   content.appendChild(detailDiv);
+
+  document.getElementById('deleteWarning').textContent = getDeleteWarning(insights);
+  document.getElementById('blockWarning').textContent = getBlockWarning(insights, sanitizeInput(cookie.etld));
+
   modal.classList.add('active');
 }
 
-function createDetailSection(title, rows) {
-  const section = document.createElement('div');
-  section.className = 'detail-section';
-  
+// Zone A: identity, ownership, and a plain-language purpose statement.
+function buildHeaderZone(cookie, insights) {
+  const zone = document.createElement('div');
+  zone.className = 'cd-header';
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'cd-title-row';
+
+  const title = document.createElement('h2');
+  title.className = 'cd-title';
+  if (insights.displayName) {
+    title.textContent = insights.displayName;
+  } else {
+    const code = document.createElement('code');
+    code.className = 'cd-code';
+    code.textContent = sanitizeInput(cookie.name);
+    title.appendChild(code);
+  }
+  titleRow.appendChild(title);
+
+  const categoryBadge = document.createElement('span');
+  categoryBadge.className = 'cd-category-badge';
+  categoryBadge.textContent = insights.category;
+  titleRow.appendChild(categoryBadge);
+
+  zone.appendChild(titleRow);
+
+  const subheader = document.createElement('p');
+  subheader.className = 'cd-subheader';
+  subheader.textContent = insights.owner
+    ? `Managed by ${insights.owner} on ${sanitizeInput(cookie.domain)}`
+    : `Set by ${sanitizeInput(cookie.domain)}`;
+  zone.appendChild(subheader);
+
+  if (insights.displayName) {
+    const technicalName = document.createElement('p');
+    technicalName.className = 'cd-technical-name';
+    technicalName.textContent = 'Technical name: ';
+    const code = document.createElement('code');
+    code.className = 'cd-code';
+    code.textContent = sanitizeInput(cookie.name);
+    technicalName.appendChild(code);
+    zone.appendChild(technicalName);
+  }
+
+  const purpose = document.createElement('p');
+  purpose.className = 'cd-purpose';
+  purpose.textContent = insights.purpose;
+  zone.appendChild(purpose);
+
+  return zone;
+}
+
+// Zone B: side-by-side privacy threat vs. site breakage impact.
+function buildImpactZone(insights) {
+  const zone = document.createElement('div');
+  zone.className = 'impact-matrix';
+
+  zone.appendChild(buildImpactBox('Privacy Threat', insights.privacyThreat, getPrivacyThreatMeaning(insights.privacyThreat)));
+  zone.appendChild(buildImpactBox('Breakage Impact', insights.breakageImpact, getBreakageImpactMeaning(insights.breakageImpact)));
+
+  return zone;
+}
+
+function buildImpactBox(label, level, meaning) {
+  const box = document.createElement('div');
+  box.className = `impact-box impact-${level}`;
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'impact-label';
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'impact-value';
+  valueEl.textContent = level.toUpperCase();
+
+  const meaningEl = document.createElement('div');
+  meaningEl.className = 'impact-meaning';
+  meaningEl.textContent = meaning;
+
+  box.appendChild(labelEl);
+  box.appendChild(valueEl);
+  box.appendChild(meaningEl);
+
+  return box;
+}
+
+// Zone C: decoded technical flags with hazard/safety summaries.
+function buildFlagsZone(cookie) {
+  const zone = document.createElement('div');
+  zone.className = 'flags-list';
+
   const heading = document.createElement('h3');
-  heading.textContent = title;
-  section.appendChild(heading);
-  
-  rows.forEach(([label, value, color]) => {
-    const row = document.createElement('div');
-    row.className = 'detail-row';
-    
-    const labelSpan = document.createElement('span');
-    labelSpan.textContent = label;
-    
-    const valueStrong = document.createElement('strong');
-    valueStrong.textContent = value;
-    if (color) valueStrong.style.color = color;
-    
-    row.appendChild(labelSpan);
-    row.appendChild(valueStrong);
-    section.appendChild(row);
+  heading.className = 'cd-zone-heading';
+  heading.textContent = 'Technical Flags';
+  zone.appendChild(heading);
+
+  const TAG_TEXT = { safe: '[SAFE]', warning: '[WARNING]', info: '[INFO]', critical: '[CRITICAL]' };
+
+  decodeFlags(cookie).forEach(flag => {
+    const item = document.createElement('div');
+    item.className = `flag-indicator flag-${flag.level}`;
+
+    const tag = document.createElement('span');
+    tag.className = 'flag-tag';
+    tag.textContent = TAG_TEXT[flag.level] || 'INFO';
+    item.appendChild(tag);
+
+    const body = document.createElement('div');
+    body.className = 'flag-body';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'flag-label';
+    labelEl.textContent = flag.label;
+
+    const implicationEl = document.createElement('div');
+    implicationEl.className = 'flag-implication';
+    implicationEl.textContent = flag.implication;
+
+    body.appendChild(labelEl);
+    body.appendChild(implicationEl);
+    item.appendChild(body);
+
+    zone.appendChild(item);
   });
-  
-  return section;
+
+  return zone;
+}
+
+// Zone D: lifespan and churn activity, summarized in plain language.
+function buildFootprintZone(cookie) {
+  const zone = document.createElement('div');
+  zone.className = 'footprint-row';
+
+  zone.appendChild(buildFootprintItem('Lifespan', getLifespanText(cookie)));
+  zone.appendChild(buildFootprintItem('Activity', getChurnText(cookie.changeCount)));
+
+  return zone;
+}
+
+function buildFootprintItem(label, value) {
+  const item = document.createElement('div');
+  item.className = 'footprint-item';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'footprint-label';
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'footprint-value';
+  valueEl.textContent = value;
+
+  item.appendChild(labelEl);
+  item.appendChild(valueEl);
+
+  return item;
 }
 
 function openSettings() {
@@ -587,16 +875,16 @@ async function loadStorageStats() {
 
 async function muteDomainFromDetail() {
   if (!state.selectedCookie) return;
-  
+
   try {
     await browser.runtime.sendMessage({
       type: 'MUTE_DOMAIN',
       domain: state.selectedCookie.etld,
       manual: true,
     });
-    
+
     closeModals();
-    await loadMutedDomains();
+    await loadRules();
     await loadActiveCookies();
   } catch (error) {
     console.error('Failed to mute domain:', error);
@@ -604,14 +892,147 @@ async function muteDomainFromDetail() {
   }
 }
 
+async function confirmAndUnmute(domain) {
+  const stats = await fetchDomainStats(domain, null);
+  const countNote = stats
+    ? ` It currently has ${stats.cookieCount} active cookie${stats.cookieCount === 1 ? '' : 's'}${stats.thirdPartyCount > 0 ? `, including ${stats.thirdPartyCount} third-party` : ''}.`
+    : '';
+
+  const confirmed = confirm(
+    `Unmute ${domain}? It will reappear in your active list and trigger high-risk notifications again.${countNote}`
+  );
+  if (!confirmed) return;
+
+  await unmuteDomain(domain);
+}
+
 async function unmuteDomain(domain) {
   try {
     await browser.runtime.sendMessage({ type: 'UNMUTE_DOMAIN', domain });
-    await loadMutedDomains();
+    await loadRules();
     await loadActiveCookies();
   } catch (error) {
     console.error('Failed to unmute domain:', error);
     alert('Failed to unmute domain');
+  }
+}
+
+async function deleteCookie() {
+  if (!state.selectedCookie) return;
+
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'DELETE_COOKIE',
+      identityHash: state.selectedCookie.identityHash,
+    });
+
+    if (response.error) {
+      alert(response.error);
+      return;
+    }
+
+    closeModals();
+    await loadActiveCookies();
+    await loadHistory();
+  } catch (error) {
+    console.error('Failed to delete cookie:', error);
+    alert('Failed to delete cookie');
+  }
+}
+
+async function blockDomainFromDetail() {
+  if (!state.selectedCookie) return;
+
+  const domain = state.selectedCookie.etld;
+  const storeId = state.selectedCookie.storeId;
+  const affectedCount = state.cookies.filter(c => c.etld === domain && c.storeId === storeId).length;
+  const containerLabel = getContainerLabel(storeId);
+
+  const confirmed = confirm(
+    `Block ${domain} in ${containerLabel}? This will immediately delete ${affectedCount} cookie${affectedCount === 1 ? '' : 's'} from this domain in this container and prevent new ones, including any active login session.`
+  );
+  if (!confirmed) return;
+
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'BLOCK_DOMAIN',
+      domain,
+      storeId,
+    });
+
+    if (response.error) {
+      alert(response.error);
+      return;
+    }
+
+    closeModals();
+    await loadRules();
+    await loadActiveCookies();
+    await loadHistory();
+  } catch (error) {
+    console.error('Failed to block domain:', error);
+    alert('Failed to block domain');
+  }
+}
+
+async function confirmAndUnblock(domain, storeId) {
+  const containerLabel = getContainerLabel(storeId);
+  const identityHash = `blocked:${storeId}:${domain}`;
+  const blockEvent = state.history.find(e =>
+    e.action === 'blocked' && e.identityHash === identityHash && !e.episodeClosed
+  );
+  const removedCount = blockEvent ? (blockEvent.count || 0) : 0;
+
+  const historyNote = removedCount > 0
+    ? ` Since this block was put in place, CookieGuard has intercepted and deleted ${removedCount} cookie${removedCount === 1 ? '' : 's'} from this domain — unblocking will allow it to set cookies again, including any cross-site trackers or advertising identifiers it previously used.`
+    : ' This domain has not attempted to set cookies since being blocked, but unblocking removes all enforcement.';
+
+  const confirmed = confirm(
+    `Unblock ${domain} (${containerLabel})?${historyNote} CookieGuard will resume passive monitoring but will no longer auto-delete its cookies.`
+  );
+  if (!confirmed) return;
+
+  await unblockDomain(domain, storeId);
+}
+
+async function unblockDomain(domain, storeId) {
+  try {
+    await browser.runtime.sendMessage({ type: 'UNBLOCK_DOMAIN', domain, storeId });
+    await loadRules();
+    await loadActiveCookies();
+    await loadHistory();
+  } catch (error) {
+    console.error('Failed to unblock domain:', error);
+    alert('Failed to unblock domain');
+  }
+}
+
+async function cleanNow() {
+  const filtered = getFilteredCookies();
+  if (filtered.length === 0) return;
+
+  const message = isFilterActive()
+    ? `Delete ${filtered.length} cookie${filtered.length === 1 ? '' : 's'} matching the current filter?`
+    : `This will delete ALL ${filtered.length} tracked cookies, including session and login cookies. Continue?`;
+
+  if (!confirm(message)) return;
+
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'CLEAN_COOKIES',
+      identityHashes: filtered.map(c => c.identityHash),
+    });
+
+    if (response.error) {
+      alert(response.error);
+      return;
+    }
+
+    await loadActiveCookies();
+    await loadHistory();
+  } catch (error) {
+    console.error('Failed to clean cookies:', error);
+    alert('Failed to clean cookies');
   }
 }
 
@@ -669,7 +1090,7 @@ function applyTheme(theme) {
 }
 
 function closeModals() {
-  document.querySelectorAll('.modal').forEach(modal => {
+  document.querySelectorAll('.modal, .detail-panel').forEach(modal => {
     modal.classList.remove('active');
   });
   state.selectedCookie = null;
