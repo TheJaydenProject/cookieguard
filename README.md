@@ -37,7 +37,7 @@ Take action directly from a cookie's details:
 - **Block** a domain to immediately purge its cookies and prevent new ones from being set — per browser container/identity.
 
 ### Circuit Breaker Protection
-Automatically detects domains that trigger rapid set/delete loops ("event churning") and temporarily mutes them, preventing CPU starvation and a flooded activity feed.
+Detects domains firing more than 50 `cookies.onChanged` events per second and suspends processing for that domain for 10 seconds. Prevents the service worker from being flooded with storage I/O and keeps the activity feed readable.
 
 ### Local History & Export
 Retains a rotating log of the last 5,000 cookie events for audit, with one-click export (with or without raw cookie values) for your own records.
@@ -68,7 +68,7 @@ CookieGuard runs as a Manifest V3 background service worker that listens to `coo
 
 1. **Classified** by [`classifier.js`](src/background/classifier.js) using first/third-party context, partition state, and keyword heuristics.
 2. **Deduplicated & hashed** (SHA-256) to keep the UI efficient without storing redundant entries.
-3. **Persisted** to `browser.storage.local` in batches (via `alarms`) to minimize I/O and battery impact.
+3. **Persisted** to `browser.storage.local` in batches (via `alarms`) to reduce I/O call frequency.
 4. **Surfaced** in the popup's **Active**, **History**, and **Rules** tabs, with optional desktop notifications for high-risk events.
 
 If you choose to mute or block a domain, that decision is enforced live — blocked domains have their cookies removed and re-blocked on arrival, even while the circuit breaker is active.
@@ -80,8 +80,8 @@ CookieGuard is built on a **Local-Only** philosophy. It does not collect telemet
 ### Data Handling
 
 * **Storage:** All data is persisted exclusively in `browser.storage.local` / `browser.storage.session`. No external servers are used.
-* **Identity Hashing:** Cookie identities are hashed (SHA-256) locally to prevent UI duplication and ensure efficient memory usage.
-* **Sanitization:** Input values are sanitized and truncated before processing to prevent Regular Expression Denial of Service (ReDoS).
+* **Identity Hashing:** Cookie identities are hashed (SHA-256, truncated to 128 bits) locally to deduplicate events across the active feed and history.
+* **Sanitization:** Cookie name, value, domain, and path are stripped of control characters, truncated to 256 characters, and HTML-escaped before being rendered in the popup.
 * **Incognito:** Private window data, when enabled, is held in `storage.session` only and is never written to disk.
 
 ## Permissions Rationale
@@ -92,7 +92,7 @@ CookieGuard is built on a **Local-Only** philosophy. It does not collect telemet
 | `storage` | Persist user settings, mute/block rules, and the local history log. |
 | `tabs` | Open the onboarding/setup page on first install. |
 | `notifications` | Alert you to high-risk tracking events in real time. |
-| `alarms` | Batch storage writes to optimize I/O performance and battery life. |
+| `alarms` | Batch storage writes to reduce I/O call frequency. |
 | `host_permissions` (`<all_urls>`) | Required to detect and act on cookies across all domains you visit. |
 
 ## Contributing
